@@ -12,7 +12,7 @@ import signal
 from datetime import datetime
 from collections import Counter
 
-INTERFACE_PADRAO = "enp4s0"
+INTERFACE_PADRAO = "wlo1"
 CSV_INTERNET = "internet.csv"
 CSV_TRANSPORTE = "transporte.csv"
 CSV_APLICACAO = "aplicacao.csv"
@@ -260,16 +260,24 @@ def loop_captura(interface):
             dst_ip = ip["dst"]
             total_len = ip["total_length"]
 
-            if proto_num == 1:
-                proto_name = "ICMP"
-            elif proto_num == 6:
-                proto_name = "TCP"
-            elif proto_num == 17:
-                proto_name = "UDP"
-            else:
-                proto_name = f"IPv4_proto_{proto_num}"
 
-            registrar_internet(timestamp, proto_name, src_ip, dst_ip, proto_num, total_len)
+            # rótulo para a camada de rede (internet.csv): registrar apenas IPv4 ou ICMP
+            if proto_num == 1:
+                net_proto = "ICMP"
+            else:
+                net_proto = "IPv4"
+
+            # rótulo para uso em contadores/logs (transporte quando aplicável)
+            if proto_num == 1:
+                trans_proto = "ICMP"
+            elif proto_num == 6:
+                trans_proto = "TCP"
+            elif proto_num == 17:
+                trans_proto = "UDP"
+            else:
+                trans_proto = f"IPv4_proto_{proto_num}"
+
+            registrar_internet(timestamp, net_proto, src_ip, dst_ip, proto_num, total_len)
 
             if proto_num == 6:  # TCP
                 tcp = analisar_cabecalho_tcp(ip["payload"])
@@ -294,7 +302,7 @@ def loop_captura(interface):
                         contadores_proto[app] += 1
 
             with trava_contadores:
-                contadores_proto[proto_name] += 1
+                contadores_proto[trans_proto] += 1
 
         elif eth["proto"] == 0x86DD:  # IPv6
             ipv6 = analisar_cabecalho_ipv6(eth["payload"])
