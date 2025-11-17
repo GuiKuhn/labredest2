@@ -135,13 +135,19 @@ def analisar_frame_ethernet(packet):
 def analisar_cabecalho_ipv4(data):
     if len(data) < 20:
         return None
+    # total_length pode estar em network order, unpack já tratou
     ver_ihl, tos, total_length, identification, flags_frag, ttl, proto, checksum, src, dst = struct.unpack('!BBHHHBBH4s4s', data[:20])
     version = ver_ihl >> 4
     ihl = ver_ihl & 0x0F
     header_length = ihl * 4
-    src_ip = socket.inet_ntoa(src)
-    dst_ip = socket.inet_ntoa(dst)
-    payload = data[header_length:total_length] if total_length <= len(data) else data[header_length:]
+    try:
+        src_ip = socket.inet_ntoa(src)
+        dst_ip = socket.inet_ntoa(dst)
+    except Exception:
+        return None
+    # evitar total_length inválido maior que o buffer
+    payload = data[header_length:total_length] if (total_length <= len(data) and total_length >= header_length) else data[header_length:]
+    raw = data[:total_length] if (total_length <= len(data) and total_length >= header_length) else data
     return {
         "version": version,
         "ihl": ihl,
@@ -156,7 +162,7 @@ def analisar_cabecalho_ipv4(data):
         "dst": dst_ip,
         "header_length": header_length,
         "payload": payload,
-        "raw": data[:total_length] if total_length <= len(data) else data
+        "raw": raw
     }
 
 
@@ -165,9 +171,13 @@ def analisar_cabecalho_ipv6(data):
         return None
     v_tc_fl, payload_len, next_header, hop_limit = struct.unpack('!IHBB', data[:8])
     version = (v_tc_fl >> 28) & 0x0F
-    src = socket.inet_ntop(socket.AF_INET6, data[8:24])
-    dst = socket.inet_ntop(socket.AF_INET6, data[24:40])
+    try:
+        src = socket.inet_ntop(socket.AF_INET6, data[8:24])
+        dst = socket.inet_ntop(socket.AF_INET6, data[24:40])
+    except Exception:
+        return None
     payload = data[40:40+payload_len] if len(data) >= 40+payload_len else data[40:]
+    raw = data[:40+payload_len] if len(data) >= 40+payload_len else data
     return {
         "version": version,
         "payload_len": payload_len,
@@ -177,7 +187,7 @@ def analisar_cabecalho_ipv6(data):
         "dst": dst,
         "payload": payload,
         "header_length": 40,
-        "raw": data[:40+payload_len] if len(data) >= 40+payload_len else data
+        "raw": raw
     }
 
 
@@ -202,7 +212,7 @@ def analisar_cabecalho_udp(data):
     if len(data) < 8:
         return None
     src_port, dst_port, length, checksum = struct.unpack('!HHHH', data[:8])
-    payload = data[8:8 + (length - 8)] if length - 8 <= len(data) - 8 else data[8:]
+    payload = data[8:8 + (length - 8)] if (length - 8 <= len(data) - 8 and length >= 8) else data[8:]
     return {"src_port": src_port, "dst_port": dst_port, "length": length, "checksum": checksum, "payload": payload}
 
 # descobrir qual dos protocolos de aplicacao é
@@ -310,6 +320,105 @@ def atualizar_estatisticas_cliente(tunnel_ip, remote_ip, remote_port, bytes_len)
         if remote_port:
             r["ports"][remote_port] += 1
 
+# processar um pacote IPv4 (extraido do TUN ou de um frame Ethernet)
+def processar_ipv4(ip, bytes_len, timestamp):
+    proto_num = ip["proto"]
+    src_ip = ip["src"]
+    dst_ip = ip["dst"]
+    total_len = ip["total_length"] if ip.get("total_length") else bytes_len
+
+    other_info = ""
+    proto_name = "IPv4"
+    if proto_num == 1:
+        proto_name = "ICMP"
+        icmp = analisar_icmpv4(ip["payload"])
+        other_info = f"type={icmp['type']} code={icmp['code']}" if icmp else ""
+        with trava_contadores:
+            contadores_proto["ICMP"] += 1
+    elif proto_num == 6:
+        proto_name = "TCP"
+        with trava_contadores:
+            contadores_proto["TCP"] += 1
+    elif proto_num == 17:
+        proto_name = "UDP"
+        with trava_contadores:
+            contadores_proto["UDP"] += 1
+    else:
+        with trava_contadores:
+            contadores_proto[f"IP_PROTO_{proto_num}"] += 1
+        proto_name = f"IPv4_proto_{proto_num}"
+
+    registrar_internet(timestamp, proto_name, src_ip, dst_ip, proto_num, other_info, total_len)
+
+    # transporte layer
+    if proto_num == 6:  # TCP
+        tcp = analisar_cabecalho_tcp(ip["payload"])
+        if not tcp:
+            return
+        src_port = tcp["src_port"]
+        dst_port = tcp["dst_port"]
+        tlen = len(ip["raw"])
+        registrar_transporte(timestamp, "TCP", src_ip, src_port, dst_ip, dst_port, tlen)
+
+        app, info = detectar_aplicacao("TCP", src_port, dst_port, tcp["payload"])
+        if app:
+            registrar_aplicacao(timestamp, app, info)
+            with trava_contadores:
+                contadores_proto[app] += 1
+
+        if src_ip.startswith("172.31.66.") or dst_ip.startswith("172.31.66."):
+            tunnel_ip = src_ip if src_ip.startswith("172.31.66.") else dst_ip
+            remote_ip = dst_ip if tunnel_ip == src_ip else src_ip
+            remote_port = dst_port if tunnel_ip == src_ip else src_port
+            atualizar_estatisticas_cliente(tunnel_ip, remote_ip, remote_port, bytes_len)
+
+    elif proto_num == 17:
+        # se for UDP
+        udp = analisar_cabecalho_udp(ip["payload"])
+        if not udp:
+            return
+        src_port = udp["src_port"]
+        dst_port = udp["dst_port"]
+        tlen = len(ip["raw"])
+        registrar_transporte(timestamp, "UDP", src_ip, src_port, dst_ip, dst_port, tlen)
+
+        app, info = detectar_aplicacao("UDP", src_port, dst_port, udp["payload"])
+        if app:
+            registrar_aplicacao(timestamp, app, info)
+            with trava_contadores:
+                contadores_proto[app] += 1
+
+        if src_ip.startswith("172.31.66.") or dst_ip.startswith("172.31.66."):
+            tunnel_ip = src_ip if src_ip.startswith("172.31.66.") else dst_ip
+            remote_ip = dst_ip if tunnel_ip == src_ip else src_ip
+            remote_port = dst_port if tunnel_ip == src_ip else src_port
+            atualizar_estatisticas_cliente(tunnel_ip, remote_ip, remote_port, bytes_len)
+
+    elif proto_num == 1:  # ICMP
+        if src_ip.startswith("172.31.66.") or dst_ip.startswith("172.31.66."):
+            tunnel_ip = src_ip if src_ip.startswith("172.31.66.") else dst_ip
+            remote_ip = dst_ip if tunnel_ip == src_ip else src_ip
+            atualizar_estatisticas_cliente(tunnel_ip, remote_ip, None, bytes_len)
+
+# processar um pacote IPv6
+def processar_ipv6(ipv6, bytes_len, timestamp):
+    proto_num = ipv6["next_header"]
+    src_ip = ipv6["src"]
+    dst_ip = ipv6["dst"]
+    total_len = ipv6.get("payload_len", len(ipv6.get("raw", b"")))
+    registrar_internet(timestamp, "IPv6", src_ip, dst_ip, proto_num, "", total_len)
+    with trava_contadores:
+        contadores_proto["IPv6"] += 1
+
+    if proto_num == 6:
+        tcp = analisar_cabecalho_tcp(ipv6["payload"])
+        if tcp:
+            registrar_transporte(timestamp, "TCP", src_ip, tcp["src_port"], dst_ip, tcp["dst_port"], total_len)
+    elif proto_num == 17:
+        udp = analisar_cabecalho_udp(ipv6["payload"])
+        if udp:
+            registrar_transporte(timestamp, "UDP", src_ip, udp["src_port"], dst_ip, udp["dst_port"], total_len)
+
 # loop de captura de pacotes
 def loop_captura(interface):
     global executando
@@ -325,6 +434,8 @@ def loop_captura(interface):
 
     print(f"[+] Capturando na interface {interface} ... (pressione Ctrl+C para sair)")
 
+    is_tun = interface.startswith("tun")
+
     while executando:
         try:
             packet, addr = s.recvfrom(65535)
@@ -338,7 +449,32 @@ def loop_captura(interface):
         timestamp = iso_now()
         bytes_len = len(packet)
 
-        # parse Ethernet
+        # Se for tun (L3 puro), o pacote começa com IP (v4/v6)
+        if is_tun:
+            if bytes_len == 0:
+                continue
+            first_byte = packet[0]
+            first_nibble = first_byte >> 4
+            if first_nibble == 4:
+                ip = analisar_cabecalho_ipv4(packet)
+                if ip is None:
+                    continue
+                processar_ipv4(ip, bytes_len, timestamp)
+                continue
+            elif first_nibble == 6:
+                ipv6 = analisar_cabecalho_ipv6(packet)
+                if ipv6 is None:
+                    continue
+                processar_ipv6(ipv6, bytes_len, timestamp)
+                continue
+            else:
+                # se não for reconhecido como IP, registrar como "other"
+                with trava_contadores:
+                    contadores_proto[f"TUN_UNKNOWN"] += 1
+                registrar_internet(timestamp, "other", "-", "-", 0, "", bytes_len)
+                continue
+
+        # Caso padrão (L2): parsear frame Ethernet
         eth = analisar_frame_ethernet(packet)
         if eth is None:
             continue
@@ -349,108 +485,17 @@ def loop_captura(interface):
             ip = analisar_cabecalho_ipv4(eth["payload"])
             if ip is None:
                 continue
-            proto_num = ip["proto"]
-            src_ip = ip["src"]
-            dst_ip = ip["dst"]
-            total_len = ip["total_length"] if ip.get("total_length") else bytes_len
-            # internet log
-            other_info = ""
-            proto_name = "IPv4"
-            if proto_num == 1:
-                proto_name = "ICMP"
-                icmp = analisar_icmpv4(ip["payload"])
-                other_info = f"type={icmp['type']} code={icmp['code']}" if icmp else ""
-                with trava_contadores:
-                    contadores_proto["ICMP"] += 1
-            elif proto_num == 6:
-                proto_name = "TCP"
-                with trava_contadores:
-                    contadores_proto["TCP"] += 1
-            elif proto_num == 17:
-                proto_name = "UDP"
-                with trava_contadores:
-                    contadores_proto["UDP"] += 1
-            else:
-                with trava_contadores:
-                    contadores_proto[f"IP_PROTO_{proto_num}"] += 1
-                proto_name = f"IPv4_proto_{proto_num}"
-
-            registrar_internet(timestamp, proto_name, src_ip, dst_ip, proto_num, other_info, total_len)
-
-            # transporte layer
-            if proto_num == 6:  # TCP
-                tcp = analisar_cabecalho_tcp(ip["payload"])
-                if not tcp:
-                    continue
-                src_port = tcp["src_port"]
-                dst_port = tcp["dst_port"]
-                tlen = len(ip["raw"])
-                registrar_transporte(timestamp, "TCP", src_ip, src_port, dst_ip, dst_port, tlen)
-
-                app, info = detectar_aplicacao("TCP", src_port, dst_port, tcp["payload"])
-                if app:
-                    registrar_aplicacao(timestamp, app, info)
-                    with trava_contadores:
-                        contadores_proto[app] += 1
-                
-                if src_ip.startswith("172.31.66.") or dst_ip.startswith("172.31.66."):
-                    tunnel_ip = src_ip if src_ip.startswith("172.31.66.") else dst_ip
-                    remote_ip = dst_ip if tunnel_ip == src_ip else src_ip
-                    remote_port = dst_port if tunnel_ip == src_ip else src_port
-                    atualizar_estatisticas_cliente(tunnel_ip, remote_ip, remote_port, bytes_len)
-
-            elif proto_num == 17:
-                # se for UDP
-                udp = analisar_cabecalho_udp(ip["payload"])
-                if not udp:
-                    continue
-                src_port = udp["src_port"]
-                dst_port = udp["dst_port"]
-                tlen = len(ip["raw"])
-                registrar_transporte(timestamp, "UDP", src_ip, src_port, dst_ip, dst_port, tlen)
-
-                app, info = detectar_aplicacao("UDP", src_port, dst_port, udp["payload"])
-                if app:
-                    registrar_aplicacao(timestamp, app, info)
-                    with trava_contadores:
-                        contadores_proto[app] += 1
-
-                if src_ip.startswith("172.31.66.") or dst_ip.startswith("172.31.66."):
-                    tunnel_ip = src_ip if src_ip.startswith("172.31.66.") else dst_ip
-                    remote_ip = dst_ip if tunnel_ip == src_ip else src_ip
-                    remote_port = dst_port if tunnel_ip == src_ip else src_port
-                    atualizar_estatisticas_cliente(tunnel_ip, remote_ip, remote_port, bytes_len)
-
-            elif proto_num == 1:  # ICMP
-                if src_ip.startswith("172.31.66.") or dst_ip.startswith("172.31.66."):
-                    tunnel_ip = src_ip if src_ip.startswith("172.31.66.") else dst_ip
-                    remote_ip = dst_ip if tunnel_ip == src_ip else src_ip
-                    atualizar_estatisticas_cliente(tunnel_ip, remote_ip, None, bytes_len)
+            processar_ipv4(ip, bytes_len, timestamp)
 
         elif eth["proto"] == 0x86DD:
             # caso seja ipv6
             ipv6 = analisar_cabecalho_ipv6(eth["payload"])
             if ipv6 is None:
                 continue
-            proto_num = ipv6["next_header"]
-            src_ip = ipv6["src"]
-            dst_ip = ipv6["dst"]
-            total_len = ipv6.get("payload_len", len(eth["payload"]))
-            registrar_internet(timestamp, "IPv6", src_ip, dst_ip, proto_num, "", total_len)
-            with trava_contadores:
-                contadores_proto["IPv6"] += 1
-
-            if proto_num == 6:
-                tcp = analisar_cabecalho_tcp(ipv6["payload"])
-                if tcp:
-                    registrar_transporte(timestamp, "TCP", src_ip, tcp["src_port"], dst_ip, tcp["dst_port"], total_len)
-            elif proto_num == 17:
-                udp = analisar_cabecalho_udp(ipv6["payload"])
-                if udp:
-                    registrar_transporte(timestamp, "UDP", src_ip, udp["src_port"], dst_ip, udp["dst_port"], total_len)
+            processar_ipv6(ipv6, bytes_len, timestamp)
 
         else:
-            # se não for HTTP, DNS, DHCP ou NTP log como "other
+            # se não for HTTP, DNS, DHCP ou NTP log como "other" por ethertype
             with trava_contadores:
                 contadores_proto[f"ETH_PROTO_{hex(eth['proto'])}"] += 1
             registrar_internet(timestamp, "other", "-", "-", eth["proto"], "", bytes_len)
