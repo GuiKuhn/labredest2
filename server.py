@@ -449,7 +449,7 @@ def loop_captura(interface):
         timestamp = iso_now()
         bytes_len = len(packet)
 
-        # Se for tun (L3 puro), o pacote começa com IP (v4/v6)
+        # se for a interface tun0 , o pacote começa com IP direto, não tem enlace
         if is_tun:
             if bytes_len == 0:
                 continue
@@ -474,7 +474,7 @@ def loop_captura(interface):
                 registrar_internet(timestamp, "other", "-", "-", 0, "", bytes_len)
                 continue
 
-        # Caso padrão (L2): parsear frame Ethernet
+        # se for outra interface: parsear frame Ethernet
         eth = analisar_frame_ethernet(packet)
         if eth is None:
             continue
@@ -510,7 +510,9 @@ def loop_interface(refresh_sec=1.0):
     global executando
     try:
         while executando:
+            # limpa o terminal
             os.system('clear')
+            # printa o contador atual
             print("Monitor de Tráfego - Interface (tempo real)")
             print(f"Time: {iso_now()}")
             print("-" * 60)
@@ -538,7 +540,7 @@ def loop_interface(refresh_sec=1.0):
         print("UI error:", e)
         executando = False
 
-def stop(signum, frame):
+def stop(sig, frame):
     global executando
     print("\n[!] Sinal recebido, encerrando...")
     executando = False
