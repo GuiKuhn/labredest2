@@ -326,29 +326,32 @@ def processar_ipv4(ip, bytes_len, timestamp):
     src_ip = ip["src"]
     dst_ip = ip["dst"]
     total_len = ip["total_length"] if ip.get("total_length") else bytes_len
-
+    # registrar na camada de rede sempre como IPv4
+    network_proto = "IPv4"
     other_info = ""
-    proto_name = "IPv4"
+    # transporte/aplicacao: mantenha nomes conhecidos ou marque como Outro
+    transport_proto = None
     if proto_num == 1:
-        proto_name = "ICMP"
+        transport_proto = "ICMP"
         icmp = analisar_icmpv4(ip["payload"])
         other_info = f"type={icmp['type']} code={icmp['code']}" if icmp else ""
         with trava_contadores:
             contadores_proto["ICMP"] += 1
     elif proto_num == 6:
-        proto_name = "TCP"
+        transport_proto = "TCP"
         with trava_contadores:
             contadores_proto["TCP"] += 1
     elif proto_num == 17:
-        proto_name = "UDP"
+        transport_proto = "UDP"
         with trava_contadores:
             contadores_proto["UDP"] += 1
     else:
+        # para protocolos não mapeados, use 'Outro' tanto no CSV quanto nos contadores
+        transport_proto = "Outro"
         with trava_contadores:
-            contadores_proto[f"IP_PROTO_{proto_num}"] += 1
-        proto_name = f"IPv4_proto_{proto_num}"
+            contadores_proto["Outro"] += 1
 
-    registrar_internet(timestamp, proto_name, src_ip, dst_ip, proto_num, other_info, total_len)
+    registrar_internet(timestamp, network_proto, src_ip, dst_ip, proto_num, other_info, total_len)
 
     # transporte layer
     if proto_num == 6:  # TCP
@@ -495,10 +498,10 @@ def loop_captura(interface):
             processar_ipv6(ipv6, bytes_len, timestamp)
 
         else:
-            # se não for HTTP, DNS, DHCP ou NTP log como "other" por ethertype
+            # se não for um ethertype tratado, marque como 'Outro'
             with trava_contadores:
-                contadores_proto[f"ETH_PROTO_{hex(eth['proto'])}"] += 1
-            registrar_internet(timestamp, "other", "-", "-", eth["proto"], "", bytes_len)
+                contadores_proto["Outro"] += 1
+            registrar_internet(timestamp, "Outro", "-", "-", eth["proto"], "", bytes_len)
 
     try:
         s.close()
