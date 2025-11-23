@@ -1,0 +1,24 @@
+data_hora,protocolo,info
+2025-11-23 19:10:58,HTTP,"port-based (src:53064,dst:80)"
+2025-11-23 19:10:59,HTTP,"port-based (src:53064,dst:80)"
+2025-11-23 19:11:00,HTTP,"port-based (src:53064,dst:80)"
+2025-11-23 19:11:01,HTTP,"port-based (src:53064,dst:80)"
+2025-11-23 19:13:27,HTTP,"port-based (src:52060,dst:80)"
+2025-11-23 19:13:28,HTTP,"port-based (src:52060,dst:80)"
+2025-11-23 19:13:29,HTTP,"port-based (src:52060,dst:80)"
+2025-11-23 19:13:30,HTTP,"port-based (src:52060,dst:80)"
+2025-11-23 19:14:11,HTTP,"port-based (src:36146,dst:80)"
+2025-11-23 19:14:12,HTTP,"port-based (src:36146,dst:80)"
+2025-11-23 19:14:13,HTTP,"port-based (src:36146,dst:80)"
+2025-11-23 19:14:14,HTTP,"port-based (src:36146,dst:80)"
+2025-11-23 19:24:42,HTTP,"port-based (src:54768,dst:80)"
+2025-11-23 19:24:43,HTTP,"port-based (src:54768,dst:80)"
+2025-11-23 19:24:44,HTTP,"port-based (src:54768,dst:80)"
+2025-11-23 19:24:45,HTTP,"port-based (src:54768,dst:80)"
+2025-11-23 21:12:40,NTP,ver=6 mode=4 leap=1
+2025-11-23 21:12:49,DHCP,dhcp
+2025-11-23 21:12:59,DHCP,dhcp
+2025-11-23 21:15:30,HTTP,"port-based (src:54834,dst:80)"
+2025-11-23 21:15:31,HTTP,"port-based (src:54834,dst:80)"
+2025-11-23 21:15:32,HTTP,"port-based (src:54834,dst:80)"
+2025-11-23 21:15:33,HTTP,"port-based (src:54834,dst:80)"
