@@ -330,24 +330,21 @@ def processar_ipv4(ip, bytes_len, timestamp):
     network_proto = "IPv4"
     other_info = ""
     # transporte/aplicacao: mantenha nomes conhecidos ou marque como Outro
-    transport_proto = None
     if proto_num == 1:
-        transport_proto = "ICMP"
+        network_proto = "ICMP"
         icmp = analisar_icmpv4(ip["payload"])
         other_info = f"type={icmp['type']} code={icmp['code']}" if icmp else ""
         with trava_contadores:
             contadores_proto["ICMP"] += 1
     elif proto_num == 6:
-        transport_proto = "TCP"
         with trava_contadores:
             contadores_proto["TCP"] += 1
+        
     elif proto_num == 17:
-        transport_proto = "UDP"
         with trava_contadores:
             contadores_proto["UDP"] += 1
     else:
         # para protocolos não mapeados, use 'Outro' tanto no CSV quanto nos contadores
-        transport_proto = "Outro"
         with trava_contadores:
             contadores_proto["Outro"] += 1
 
@@ -474,7 +471,7 @@ def loop_captura(interface):
                 # se não for reconhecido como IP, registrar como "other"
                 with trava_contadores:
                     contadores_proto[f"TUN_UNKNOWN"] += 1
-                registrar_internet(timestamp, "other", "-", "-", 0, "", bytes_len)
+                registrar_internet(timestamp, "Outro", "-", "-", 0, "", bytes_len)
                 continue
 
         # se for outra interface: parsear frame Ethernet
